@@ -1,9 +1,6 @@
-
-
-
 ## 技术方案
 
-- 文档解析：`PyMuPDF`、`python-docx`、`python-pptx`、`RapidOCR`
+- 文档解析：`PyMuPDF`、`python-docx`、`python-pptx`、`RapidOCR`（需要改进）
 - 向量检索：`Chroma`
 - 本地向量模型：`sentence-transformers + BAAI/bge-small-zh-v1.5`
 - 图数据库：`Neo4j`
@@ -12,6 +9,11 @@
 
 
 ## 准备数据
+
+创建data文件夹
+
+创建model文件夹
+
 
 把你的资料放到 `data/` 目录下，例如：
 
@@ -25,7 +27,7 @@
 
 ## 环境变量
 
-复制 `.env.example` 为 `.env`，填写：
+复制 `.env.example` 为 `.env`，至少填写：
 
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL`
@@ -144,21 +146,30 @@ kg-rag-local-qwen-test --device cuda
 kg-rag-local-qwen-test --device cpu
 ```
 
-## 当前实现内容
-
-- 解析 `PDF / DOCX / DOC / PPTX / 图片`
-- 对扫描 PDF 页面自动尝试 OCR
-- 将文本切块后写入 `Chroma`
-- 用大模型从 chunk 中抽取实体关系
-- 将关系写入 `Neo4j`
-- 查询时同时参考向量检索结果和图谱关系
+## neo4j 基础指令
 
 
 加载数据
-neo4j-admin database load neo4j --from-path=C:\Users\29026\neo4j_export --overwrite-destination=true
+```bash
+neo4j-admin database load neo4j --from-path=导出图谱的路径
+```
 
 查询节点
+```bash
 match(n) return n
+```
 
-查询关系
-match()
+
+## TO DO
+
+优化构建数据库部分
+
+    1、优化文档解析方法
+
+    2、优化向量库写入方法
+
+    3、优化图谱生成方法
+
+    4、在生成图谱时做一个实体表格
+
+    5、图谱检索时加入实体链接增强（抽取实体后与实体表格做匹配）
