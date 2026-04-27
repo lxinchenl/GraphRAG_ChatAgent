@@ -53,7 +53,9 @@ pip install -e .
 
 
 先启动neo4j数据库
+```bash
 neo4j.bat console
+```
 
 
 构建索引：
