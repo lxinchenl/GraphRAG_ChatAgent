@@ -3,6 +3,8 @@ add_data/
 data/
 workdir/
 model/
+.env
+src copy/
 
 # Python caches and virtual envs
 __pycache__/
