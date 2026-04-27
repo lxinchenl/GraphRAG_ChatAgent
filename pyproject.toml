@@ -1,0 +1,39 @@
+[project]
+name = "kg-rag-demo"
+version = "0.1.0"
+description = "A lightweight Chinese knowledge-graph + RAG demo for PDF, Word and images."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "chromadb",
+  "huggingface-hub",
+  "neo4j",
+  "openai",
+  "pymupdf",
+  "python-docx",
+  "python-pptx",
+  "rapidocr-onnxruntime",
+  "safetensors",
+  "sentence-transformers",
+  "streamlit",
+  "transformers>=4.51.0",
+  "accelerate",
+  "pydantic>=2",
+  "python-dotenv",
+  "Pillow",
+  "langgraph",
+]
+
+[project.scripts]
+kg-rag = "kg_rag_demo.cli:main"
+kg-rag-local-qwen-test = "kg_rag_demo.local_qwen_test:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
