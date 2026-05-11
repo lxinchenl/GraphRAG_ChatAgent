@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -75,11 +75,29 @@ SHORT_MEMORY_PATH = MEMORY_DIR / "short_term_memory.jsonl"
 LONG_MEMORY_PATH = MEMORY_DIR / "long_term_memory.jsonl"
 
 
+def _parse_api_keys() -> list[str]:
+    keys_env = os.getenv("OPENAI_API_KEYS", "")
+    if keys_env:
+        return [k.strip() for k in keys_env.split(",") if k.strip()]
+    single_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if single_key:
+        return [single_key]
+    return []
+
+
+def _parse_chat_models() -> list[str]:
+    models_env = os.getenv("OPENAI_CHAT_MODELS", "")
+    if models_env:
+        return [m.strip() for m in models_env.split(",") if m.strip()]
+    single_model = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini").strip()
+    return [single_model]
+
+
 @dataclass
 class Settings:
-    openai_api_key: str = (os.getenv("OPENAI_API_KEY", "") or "").strip()
+    openai_api_keys: list[str] = field(default_factory=_parse_api_keys)
     openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    openai_chat_model: str = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+    openai_chat_models: list[str] = field(default_factory=_parse_chat_models)
     openai_timeout_seconds: float = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "90"))
     openai_max_retries: int = max(0, int(os.getenv("OPENAI_MAX_RETRIES", "2")))
     openai_retry_backoff_seconds: float = float(os.getenv("OPENAI_RETRY_BACKOFF_SECONDS", "2"))
@@ -91,6 +109,7 @@ class Settings:
     neo4j_password: str = os.getenv("NEO4J_PASSWORD", "")
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "1000"))
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "80"))
+    vector_batch_size: int = max(50, int(os.getenv("VECTOR_BATCH_SIZE", "500")))
     retrieval_k: int = int(os.getenv("RETRIEVAL_K", "5"))
     collection_name: str = os.getenv("CHROMA_COLLECTION", "kg_rag_demo")
     graph_extract_workers: int = max(1, int(os.getenv("GRAPH_EXTRACT_WORKERS", "4")))
@@ -127,7 +146,7 @@ class Settings:
     long_memory_max_chars: int = max(100, int(os.getenv("LONG_MEMORY_MAX_CHARS", "500")))
     domain_keywords: str = os.getenv(
         "DOMAIN_KEYWORDS",
-        "数据库,关系代数,事务,范式,ER,SQL,并发,锁,隔离级别,索引,数据模型,关系模式,知识图谱",
+        "人工智能,机器学习,深度学习,神经网络,大模型,LLM,Transformer,卷积神经网络,循环神经网络,CNN,RNN,LSTM,GRU,注意力机制,预训练模型,微调,LoRA,提示词工程,向量检索,嵌入,语义向量,知识图谱,实体抽取,关系抽取,多轮对话,检索增强,RAG,向量数据库,相似度计算,聚类,分类,回归,决策树,随机森林,强化学习,监督学习,无监督学习,半监督学习,过拟合,欠拟合,归一化,激活函数,损失函数,梯度下降,反向传播,计算机视觉,图像分类,目标检测,语义分割,自然语言处理,NLP,词嵌入,BERT,GPT,文本生成,情感分析,命名实体识别,机器翻译",
     )
 
 

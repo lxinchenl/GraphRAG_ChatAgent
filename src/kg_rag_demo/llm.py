@@ -36,7 +36,7 @@ ANSWER_PROMPT = """你是一个严谨的中文知识问答助手。
 
 要求:
 1. 优先使用已给出的资料，不要臆造。
-2. 如果资料不足，请明确说“资料不足”。
+2. 如果资料不足，请明确说"资料不足"。
 3. 回答尽量简洁，并在末尾附上引用来源文件名。
 """
 
@@ -51,7 +51,7 @@ QUERY_ENTITY_PROMPT = """你是一个问题实体抽取助手。
 
 要求:
 1. 只抽取适合在知识图谱中查找的核心实体或名词短语。
-2. 不要抽取“什么”“如何”“为什么”“组成”“有哪些”这类问法词。
+2. 不要抽取"什么""如何""为什么""组成""有哪些"这类问法词。
 3. 最多输出 5 个实体。
 4. 如果无法判断，返回空数组。
 5. 只输出 JSON，不要输出解释。
@@ -72,12 +72,12 @@ QUERY_REWRITE_PROMPT = """你是一个检索查询改写助手，请把用户问
 """
 
 HYPOTHETICAL_ANSWER_PROMPT = """你是一个检索增强助手。
-请先根据问题生成一段“可能的教材式回答”，用于 HyDE 检索。
+请先根据问题生成一段"可能的教材式回答"，用于 HyDE 检索。
 
 要求：
 1. 回答控制在 80~160 字。
 2. 包含尽可能多的关键术语与概念关系。
-3. 不要声明“不确定”，直接给出一个有信息量的假设性答案文本。
+3. 不要声明"不确定"，直接给出一个有信息量的假设性答案文本。
 """
 
 GRAPH_ENTITY_SYNONYM_PROMPT = """你是知识图谱查询扩展助手。
@@ -116,10 +116,10 @@ INTENT_CLASSIFY_PROMPT = """你是多轮问答中的意图路由助手。你只�
 """
 
 MEMORY_REUSE_ANSWER_PROMPT = """你是一个多轮问答助手。下面给出历史检索提示词（包含当时证据）和历史回答。
-请优先复用历史证据回答当前问题；若历史证据不足，明确说“资料不足”，不要编造新事实。
+请优先复用历史证据回答当前问题；若历史证据不足，明确说"资料不足"，不要编造新事实。
 """
 
-LONG_MEMORY_WRITE_INTENT_PROMPT = """你是长期记忆写入判断器。判断当前用户问题是否包含“应长期保存的用户事实”。
+LONG_MEMORY_WRITE_INTENT_PROMPT = """你是长期记忆写入判断器。判断当前用户问题是否包含"应长期保存的用户事实"。
 典型应写入的内容：
 - 用户自我信息（姓名、身份、偏好、限制、长期目标）
 - 用户给助手的长期人设/规则
@@ -164,13 +164,77 @@ EVIDENCE_SELECTION_PROMPT = """你是证据筛选助手。请从候选检索片�
 """
 
 
+class APIResourceManager:
+    """API Key + Model 资源池，支持 Key 轮换与模型降级。
+
+    故障转移策略（优先换模型，同账号其他模型通常还有量）：
+    1. 当前模型不可用 → 降级到下一个模型（同 Key）
+    2. 所有模型耗尽 → 轮换到下一个 Key
+    3. 遍历所有 (Key, Model) 组合，直到找到可用的或全部耗尽
+    """
+
+    def __init__(self, api_keys: list[str], chat_models: list[str]) -> None:
+        if not api_keys:
+            raise ValueError("至少需要一个 API Key，请设置 OPENAI_API_KEY 或 OPENAI_API_KEYS")
+        if not chat_models:
+            raise ValueError("至少需要一个 Chat Model，请设置 OPENAI_CHAT_MODEL 或 OPENAI_CHAT_MODELS")
+        self.api_keys = api_keys
+        self.chat_models = chat_models
+        self._failed: set[tuple[int, str]] = set()
+        self._current_key_idx = 0
+        self._current_model_idx = 0
+
+    @property
+    def current_key_index(self) -> int:
+        return self._current_key_idx
+
+    @property
+    def current_model(self) -> str:
+        return self.chat_models[self._current_model_idx]
+
+    def get_client(self, base_url: str) -> tuple[int, str, OpenAI]:
+        """返回 (key_index, model, client)，优先换模型再换 Key."""
+        for key_offset in range(len(self.api_keys)):
+            key_idx = (self._current_key_idx + key_offset) % len(self.api_keys)
+            for model_offset in range(len(self.chat_models)):
+                model_idx = (self._current_model_idx + model_offset) % len(self.chat_models)
+                model = self.chat_models[model_idx]
+                if (key_idx, model) in self._failed:
+                    continue
+                try:
+                    client = OpenAI(
+                        api_key=self.api_keys[key_idx],
+                        base_url=base_url,
+                        max_retries=0,
+                    )
+                    self._current_key_idx = key_idx
+                    self._current_model_idx = model_idx
+                    return key_idx, model, client
+                except Exception:
+                    self._failed.add((key_idx, model))
+                    continue
+
+        raise RuntimeError("所有 API Key 与模型的组合均已耗尽，请检查配额或补充新 Key。")
+
+    def mark_failed(self, key_index: int, model: str) -> None:
+        self._failed.add((key_index, model))
+
+    def rotate_key(self) -> None:
+        self._current_key_idx = (self._current_key_idx + 1) % len(self.api_keys)
+
+
 class LLMClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = OpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            max_retries=0,
+        self.resource_mgr = APIResourceManager(settings.openai_api_keys, settings.openai_chat_models)
+        self.current_key_index: int = 0
+        self.current_model: str = settings.openai_chat_models[0]
+        self.client: OpenAI | None = None
+        self._init_client()
+
+    def _init_client(self) -> None:
+        self.current_key_index, self.current_model, self.client = self.resource_mgr.get_client(
+            self.settings.openai_base_url
         )
 
     @cached_property
@@ -220,18 +284,45 @@ class LLMClient:
         return [float(score) for score in scores]
 
     def chat(self, system_prompt: str, user_prompt: str) -> str:
-        response = self._create_chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.1,
-        )
-        return response.choices[0].message.content or ""
+        """带故障转移的 Chat 接口：Key 轮换 + 模型降级."""
+        last_error: Exception | None = None
+        total_pairs = len(self.settings.openai_api_keys) * len(self.settings.openai_chat_models)
+        attempts_per_pair = max(1, self.settings.openai_max_retries)
+
+        for pair_attempt in range(total_pairs):
+            for attempt in range(attempts_per_pair):
+                try:
+                    response = self._create_chat_completion(
+                        model=self.current_model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=0.1,
+                    )
+                    return response.choices[0].message.content or ""
+                except Exception as exc:
+                    last_error = exc
+                    if self._should_switch_resource(exc):
+                        break
+                    if attempt < attempts_per_pair - 1:
+                        sleep_seconds = self.settings.openai_retry_backoff_seconds * (2 ** attempt)
+                        time.sleep(sleep_seconds)
+
+            self.resource_mgr.mark_failed(self.current_key_index, self.current_model)
+            try:
+                self._init_client()
+            except RuntimeError:
+                break
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("所有 API Key 与模型组合均已耗尽，无法完成调用。")
 
     def image_to_text(self, image_bytes: bytes, instruction: str) -> str:
         encoded = base64.b64encode(image_bytes).decode("utf-8")
         response = self._create_chat_completion(
+            model=self.current_model,
             messages=[
                 {
                     "role": "user",
@@ -512,26 +603,32 @@ class LLMClient:
         text = re.sub(r"[？?]+$", "", text).strip()
         return text or question.strip()
 
-    def _create_chat_completion(self, messages: list[dict[str, Any]], temperature: float) -> Any:
-        last_error: Exception | None = None
-        total_attempts = self.settings.openai_max_retries + 1
-        for attempt in range(1, total_attempts + 1):
-            try:
-                return self.client.chat.completions.create(
-                    model=self.settings.openai_chat_model,
-                    temperature=temperature,
-                    messages=messages,
-                    timeout=self.settings.openai_timeout_seconds,
-                )
-            except Exception as exc:
-                last_error = exc
-                if attempt >= total_attempts:
-                    raise
-                sleep_seconds = self.settings.openai_retry_backoff_seconds * (2 ** (attempt - 1))
-                time.sleep(sleep_seconds)
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("聊天接口调用失败，且未捕获到具体异常。")
+    def _create_chat_completion(self, model: str, messages: list[dict[str, Any]], temperature: float) -> Any:
+        """底层调用（无重试，重试逻辑由 chat() 处理）"""
+        return self.client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            messages=messages,
+            timeout=self.settings.openai_timeout_seconds,
+        )
+
+    @staticmethod
+    def _should_switch_resource(exc: Exception) -> bool:
+        """判断是否应切换 Key/Model（资源类错误）。"""
+        status_code = (
+            getattr(exc, "status_code", None)
+            or getattr(getattr(exc, "response", None), "status_code", None)
+        )
+        if status_code in {429, 402}:
+            return True
+        msg = str(exc).lower()
+        if any(kw in msg for kw in ["quota", "rate limit", "insufficient", "exhausted", "超出", "额度", "限制"]):
+            return True
+        if status_code in {404, 403} and any(
+            kw in msg for kw in ["model", "endpoint", "not found", "access", "invalid", "not exist"]
+        ):
+            return True
+        return False
 
     @staticmethod
     def _safe_load_json(raw: str) -> dict[str, Any]:
