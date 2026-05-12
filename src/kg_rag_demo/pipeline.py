@@ -621,14 +621,12 @@ class DemoPipeline:
 
     def _ask_graph_retrieve(self, state: AskState) -> AskState:
         max_hops = self.ask_config.graph_max_hops if self.ask_config.enable_graph_multi_hop else 1
-        graph_query_limit = max(self.ask_config.graph_top_k * 4, self.settings.retrieval_k * 4)
         graph_hits = self._require_graph_store().query_entity_relations(
             state["graph_query_entities"],
-            limit=graph_query_limit,
             max_hops=max_hops,
         )
         processed_graph_hits, graph_post_debug = self._postprocess_graph_hits(
-            query_entities=state["graph_query_entities"],
+            question=state["question"],
             graph_hits=graph_hits,
         )
         self._log(
@@ -648,7 +646,7 @@ class DemoPipeline:
             **state["debug_info"],
             "graph_max_hops": max_hops,
             "graph_multi_hop_enabled": self.ask_config.enable_graph_multi_hop,
-            "graph_query_limit": graph_query_limit,
+            "graph_query_limit": "unlimited",
             "graph_postprocess": graph_post_debug,
             "graph_hit_preview": [
                 {
@@ -663,6 +661,11 @@ class DemoPipeline:
                 for item in processed_graph_hits[:20]
             ],
         }
+        if self.ask_config.debug_mode:
+            debug_info["raw_graph_hits"] = self._format_graph_hits_for_debug(graph_hits)
+            debug_info["reranked_graph_hits"] = graph_post_debug.get("reranked_hits", [])
+            self._log(f"[ask][debug] 原始图谱命中明细: {debug_info['raw_graph_hits']}")
+            self._log(f"[ask][debug] BGE排序后图谱命中明细: {debug_info['reranked_graph_hits']}")
         return {
             **state,
             "graph_hits": processed_graph_hits,
@@ -749,7 +752,7 @@ class DemoPipeline:
 
     def _postprocess_graph_hits(
         self,
-        query_entities: list[str],
+        question: str,
         graph_hits: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         raw_count = len(graph_hits)
@@ -759,8 +762,15 @@ class DemoPipeline:
         dedup_count = len(deduped)
 
         ranked = deduped
+        rerank_method = "disabled"
         if self.ask_config.enable_graph_hit_rerank:
-            ranked = self._score_and_sort_graph_hits(query_entities, deduped)
+            try:
+                ranked = self._score_and_sort_graph_hits(question, deduped)
+                rerank_method = "bge_cross_encoder"
+            except Exception as exc:
+                self._log(f"[ask] 图谱 BGE 重排失败，回退为去重顺序: {exc}")
+                ranked = deduped
+                rerank_method = "fallback_dedup_order"
         after_rerank_count = len(ranked)
 
         final_hits = ranked
@@ -777,11 +787,16 @@ class DemoPipeline:
             "rerank_applied": self.ask_config.enable_graph_hit_rerank,
             "truncate_applied": self.ask_config.enable_graph_hit_truncate,
             "graph_top_k": self.ask_config.graph_top_k,
+            "graph_rerank_method": rerank_method,
             "final_hit_ids": [
                 f"{item.get('source', '')}|{item.get('relation', '')}|{item.get('target', '')}"
                 for item in final_hits
             ],
         }
+        if self.ask_config.debug_mode:
+            debug_info["deduped_hits"] = self._format_graph_hits_for_debug(deduped)
+            debug_info["reranked_hits"] = self._format_graph_hits_for_debug(ranked)
+            debug_info["final_hits"] = self._format_graph_hits_for_debug(final_hits)
         return final_hits, debug_info
 
     @staticmethod
@@ -810,37 +825,48 @@ class DemoPipeline:
                 merged[key] = replacement
         return list(merged.values())
 
-    def _score_and_sort_graph_hits(self, query_entities: list[str], graph_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        query_set = {item.strip() for item in query_entities if item.strip()}
+    def _score_and_sort_graph_hits(self, question: str, graph_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not graph_hits:
+            return []
+        triple_texts = [self._graph_hit_to_text(item) for item in graph_hits]
+        scores = self.llm.rerank(question, triple_texts)
         scored: list[dict[str, Any]] = []
-        for item in graph_hits:
-            matched_entity = str(item.get("matched_entity", "")).strip()
-            relation = str(item.get("relation", "")).strip()
-            evidence = str(item.get("evidence", "")).strip()
-            hop = int(item.get("path_hops", 1) or 1)
-            score = 0.0
-            if matched_entity and matched_entity in query_set:
-                score += self.ask_config.graph_score_exact_match_weight
-            elif matched_entity:
-                score += self.ask_config.graph_score_partial_match_weight
-            score += self.ask_config.graph_score_hop_weight / max(1, hop)
-            if relation:
-                score += self.ask_config.graph_score_relation_weight
-            if evidence:
-                score += self.ask_config.graph_score_evidence_weight
-            if str(item.get("source_path", "")).strip():
-                score += self.ask_config.graph_score_source_weight
+        for item, text, score in zip(graph_hits, triple_texts, scores):
             merged = dict(item)
-            merged["graph_score"] = round(score, 6)
+            merged["graph_score"] = float(score)
+            merged["graph_rerank_text"] = text
             scored.append(merged)
-        scored.sort(
-            key=lambda x: (
-                float(x.get("graph_score", 0.0)),
-                -int(x.get("path_hops", 9999) or 9999),
-            ),
-            reverse=True,
-        )
+        scored.sort(key=lambda x: float(x.get("graph_score", -1e9)), reverse=True)
         return scored
+
+    @staticmethod
+    def _graph_hit_to_text(item: dict[str, Any]) -> str:
+        source = str(item.get("source", "")).strip()
+        relation = str(item.get("relation", "")).strip()
+        target = str(item.get("target", "")).strip()
+        evidence = str(item.get("evidence", "")).strip()
+        hops = int(item.get("path_hops", 1) or 1)
+        return f"{source} --{relation}--> {target}。证据：{evidence or '无'}。跳数：{hops}"
+
+    def _format_graph_hits_for_debug(self, graph_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        formatted: list[dict[str, Any]] = []
+        for idx, item in enumerate(graph_hits, start=1):
+            formatted.append(
+                {
+                    "rank": idx,
+                    "query_entity": item.get("query_entity"),
+                    "matched_entity": item.get("matched_entity"),
+                    "source": item.get("source"),
+                    "relation": item.get("relation"),
+                    "target": item.get("target"),
+                    "path_hops": item.get("path_hops"),
+                    "graph_score": item.get("graph_score"),
+                    "rerank_text": item.get("graph_rerank_text") or self._graph_hit_to_text(item),
+                    "evidence": item.get("evidence"),
+                    "source_path": item.get("source_path"),
+                }
+            )
+        return formatted
 
     def _build_search_queries(self, question: str) -> list[str]:
         if not self.ask_config.enable_query_rewrite:

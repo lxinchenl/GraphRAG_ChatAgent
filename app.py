@@ -520,7 +520,20 @@ with ask_tab:
                         st.json({"entity_synonym_map": synonym_map})
                     graph_post = result.debug_info.get("graph_postprocess", {})
                     if graph_post:
-                        st.json({"graph_postprocess": graph_post})
+                        graph_post_summary = {
+                            key: value
+                            for key, value in graph_post.items()
+                            if key not in {"deduped_hits", "reranked_hits", "final_hits"}
+                        }
+                        st.json({"graph_postprocess": graph_post_summary})
+                    raw_graph_hits = result.debug_info.get("raw_graph_hits", [])
+                    reranked_graph_hits = result.debug_info.get("reranked_graph_hits", [])
+                    if raw_graph_hits:
+                        with st.expander(f"原始图谱检索结果（重排前，共 {len(raw_graph_hits)} 条）"):
+                            st.dataframe(raw_graph_hits, use_container_width=True, hide_index=True)
+                    if reranked_graph_hits:
+                        with st.expander(f"BGE 重排后的图谱结果（截断前，共 {len(reranked_graph_hits)} 条）"):
+                            st.dataframe(reranked_graph_hits, use_container_width=True, hide_index=True)
                     final_prompt = result.debug_info.get("final_answer_prompt", "")
                     if final_prompt:
                         with st.expander("最终回答提示词 (Debug)"):

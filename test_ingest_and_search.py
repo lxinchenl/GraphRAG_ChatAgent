@@ -272,7 +272,7 @@ def step_search_test(
             print(f"\n  [Graph] 抽取实体: {entities}")
             if entities:
                 t0 = time.perf_counter()
-                graph_hits = gs.query_entity_relations(entities, limit=cfg.graph_top_k * 4)
+                graph_hits = gs.query_entity_relations(entities)
                 graph_time = time.perf_counter() - t0
                 print(f"  [Graph] 命中 {len(graph_hits)} 条关系 ({graph_time:.2f}s)")
                 for i, hit in enumerate(graph_hits[:5], start=1):

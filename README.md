@@ -162,6 +162,10 @@ kg-rag-local-qwen-test --device cpu
 
 ## neo4j 基础指令
 
+导出数据
+```bash
+neo4j-admin database dump neo4j --to-path=导出图谱的路径
+```
 
 加载数据
 ```bash

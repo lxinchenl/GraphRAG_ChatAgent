@@ -94,7 +94,6 @@ class GraphStore:
     def query_entity_relations(
         self,
         entity_names: list[str],
-        limit: int = 8,
         entity_limit: int = 5,
         max_hops: int = 1,
     ) -> list[dict[str, Any]]:
@@ -129,14 +128,12 @@ class GraphStore:
                r.source_path AS source_path,
                r.title AS title,
                hop AS path_hops
-        LIMIT $limit
         """
         query = query_template.replace("__REL_HOP_PATTERN__", rel_hop_pattern)
         with self.driver.session() as session:
             result = session.run(
                 query,
                 entity_names=entity_names,
-                limit=limit,
                 entity_limit=entity_limit,
             )
             return [record.data() for record in result]
